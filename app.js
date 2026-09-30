@@ -121,7 +121,9 @@ function syncWords(audio,card){
   });
 
   const total=weights.reduce((a,b)=>a+b,0);
-  const t=audio.currentTime;
+  // Start highlighting slightly early so the visual cue leads the recitation.
+  const lead=0.15;
+  const t=Math.max(0,audio.currentTime+lead);
   let elapsed=0;
   let active=words.length-1;
 

@@ -1,5 +1,12 @@
 const DATA_URL="data.json";
-let data={},juz=1,page=1,audio=null,card=null,repeatLeft=0,slow=false;
+
+let data={};
+let juz=1;
+let page=1;
+let currentAudio=null;
+let currentCard=null;
+let repeatLeft=0;
+let slowMode=false;
 
 const ranges={1:[1,22],2:[22,42]};
 const $=id=>document.getElementById(id);
@@ -11,9 +18,9 @@ async function init(){
 }
 
 function buildPages(){
-  const [a,b]=ranges[juz];
+  const [start,end]=ranges[juz];
   $("page").innerHTML="";
-  for(let p=a;p<=b;p++){
+  for(let p=start;p<=end;p++){
     const o=document.createElement("option");
     o.value=p;
     o.textContent=`Page ${p}`;
@@ -22,160 +29,224 @@ function buildPages(){
   $("page").value=page;
 }
 
-function clearLearning(){
-  document.querySelectorAll(".ayah.learning").forEach(el=>el.classList.remove("learning"));
-  card=null;
-}
-
-function stop(){
-  if(audio){
-    audio.pause();
-    audio.currentTime=0;
+function stopCurrent(){
+  if(currentAudio){
+    currentAudio.pause();
+    currentAudio.currentTime=0;
   }
-  clearLearning();
-  audio=null;
+  clearHighlight();
+  currentAudio=null;
+  currentCard=null;
   repeatLeft=0;
 }
 
-function setLearning(c,on){
-  if(on){
-    document.querySelectorAll(".ayah.learning").forEach(el=>{
-      if(el!==c) el.classList.remove("learning");
-    });
-    c.classList.add("learning");
-    card=c;
-  }else{
-    c.classList.remove("learning");
-    if(card===c) card=null;
+function clearHighlight(){
+  document.querySelectorAll(".word.active").forEach(w=>w.classList.remove("active"));
+  document.querySelectorAll(".ayah.playing").forEach(c=>c.classList.remove("playing"));
+}
+
+function highlightWord(card, index){
+  card.querySelectorAll(".word").forEach((w,i)=>{
+    w.classList.toggle("active",i===index);
+  });
+  card.classList.add("playing");
+}
+
+function makeAudio(v,card){
+  const src=`https://everyayah.com/data/Abdul_Basit_Murattal_192kbps/${String(v.s).padStart(3,"0")}${String(v.a).padStart(3,"0")}.mp3`;
+  const audio=new Audio(src);
+  audio.preload="auto";
+
+  audio.addEventListener("loadedmetadata",()=>{
+    syncWords(audio,card);
+  });
+
+  audio.addEventListener("timeupdate",()=>{
+    syncWords(audio,card);
+  });
+
+  audio.addEventListener("play",()=>{
+    currentAudio=audio;
+    currentCard=card;
+    card.classList.add("playing");
+  });
+
+  audio.addEventListener("pause",()=>{
+    if(!audio.ended){
+      card.classList.remove("playing");
+    }
+  });
+
+  audio.addEventListener("ended",()=>{
+    clearHighlight();
+
+    if(repeatLeft>0 && currentAudio===audio){
+      repeatLeft--;
+      audio.currentTime=0;
+      audio.play();
+    }else if(currentAudio===audio){
+      currentAudio=null;
+      currentCard=null;
+      repeatLeft=0;
+    }
+  });
+
+  audio.addEventListener("error",()=>{
+    if(currentAudio===audio){
+      clearHighlight();
+      currentAudio=null;
+      currentCard=null;
+    }
+    alert("Audio could not be loaded. Please try again.");
+  });
+
+  return audio;
+}
+
+/*
+  The EveryAyah file is one complete ayah. Its public MP3 does not carry
+  word timestamps, so this browser-only version follows the recitation by
+  distributing the measured audio duration across the words. This keeps
+  the highlighting synchronized without another API or login.
+*/
+function syncWords(audio,card){
+  if(!audio.duration || !isFinite(audio.duration)) return;
+
+  const words=[...card.querySelectorAll(".word")];
+  if(!words.length) return;
+
+  const weights=words.map(w=>{
+    const clean=w.textContent.replace(/[ۖ-ۭٱ]/g,"");
+    return Math.max(1,[...clean].length);
+  });
+
+  const total=weights.reduce((a,b)=>a+b,0);
+  const t=audio.currentTime;
+  let elapsed=0;
+  let active=words.length-1;
+
+  for(let i=0;i<words.length;i++){
+    const end=audio.duration*(elapsed+weights[i])/total;
+    if(t<=end){
+      active=i;
+      break;
+    }
+    elapsed+=weights[i];
   }
+
+  highlightWord(card,active);
 }
 
 function render(){
-  stop();
+  stopCurrent();
+
   const list=data[String(page)]||[];
-  $("content").innerHTML="<div class=note>Listen • Pause • Slow down • Repeat and read aloud</div>";
+  $("content").innerHTML="<div class='note'>Listen • Pause • Slower • Repeat 3× • Follow the words as they are recited</div>";
 
   list.forEach(v=>{
-    const c=document.createElement("article");
-    c.className="ayah";
+    const card=document.createElement("article");
+    card.className="ayah";
 
-    const t=document.createElement("div");
-    t.className="arabic";
-    t.textContent=v.text;
+    const text=document.createElement("div");
+    text.className="arabic";
 
-    const n=document.createElement("span");
-    n.className="num";
-    n.textContent=v.a;
-    t.appendChild(n);
+    const words=v.text.trim().split(/\s+/);
+    words.forEach((word,i)=>{
+      const span=document.createElement("span");
+      span.className="word";
+      span.textContent=word;
+      text.appendChild(span);
+      if(i<words.length-1) text.appendChild(document.createTextNode(" "));
+    });
 
-    const a=document.createElement("div");
-    a.className="actions";
+    const num=document.createElement("span");
+    num.className="num";
+    num.textContent=v.a;
+    text.appendChild(num);
+
+    const actions=document.createElement("div");
+    actions.className="actions";
 
     const listen=btn("▶ Listen");
     const pause=btn("⏸ Pause");
     const slower=btn("🐢 Slower");
     const repeat=btn("🔁 Repeat 3×");
 
-    a.append(listen,pause,slower,repeat);
-    c.append(t,a);
-    $("content").appendChild(c);
+    actions.append(listen,pause,slower,repeat);
+    card.append(text,actions);
+    $("content").appendChild(card);
 
-    function make(){
-      if(!audio){
-        audio=new Audio(
-          `https://everyayah.com/data/Abdul_Basit_Murattal_192kbps/${String(v.s).padStart(3,"0")}${String(v.a).padStart(3,"0")}.mp3`
-        );
+    let myAudio=null;
 
-        audio.preload="auto";
-
-        audio.onplay=()=>{
-          setLearning(c,true);
-        };
-
-        audio.onpause=()=>{
-          if(audio && !audio.ended) setLearning(c,false);
-        };
-
-        audio.onended=()=>{
-          setLearning(c,false);
-
-          if(repeatLeft>0){
-            repeatLeft--;
-            audio.currentTime=0;
-            setLearning(c,true);
-            audio.play();
-          }
-        };
-
-        audio.onerror=()=>{
-          setLearning(c,false);
-          alert("Audio could not be loaded. Please try again.");
-        };
-      }
-      return audio;
+    function getAudio(){
+      if(!myAudio) myAudio=makeAudio(v,card);
+      return myAudio;
     }
 
     listen.onclick=()=>{
-      const x=make();
-      stopOther(x,c);
+      const a=getAudio();
+      if(currentAudio && currentAudio!==a){
+        currentAudio.pause();
+        currentAudio.currentTime=0;
+      }
+      clearHighlight();
       repeatLeft=0;
-      x.playbackRate=1;
-      x.currentTime=0;
-      setLearning(c,true);
-      x.play();
+      a.playbackRate=1;
+      a.currentTime=0;
+      currentAudio=a;
+      currentCard=card;
+      a.play();
     };
 
     pause.onclick=()=>{
-      if(audio && audio===make() && !audio.paused){
-        audio.pause();
-        return;
+      if(myAudio && !myAudio.paused){
+        myAudio.pause();
       }
-
-      const x=make();
-      stopOther(x,c);
-      x.play();
     };
 
     slower.onclick=()=>{
-      const x=make();
-      stopOther(x,c);
-      x.playbackRate=slow ? 0.5 : 0.75;
-      slow=!slow;
-      slower.textContent=slow ? "🐢 Very Slow" : "🐢 Slower";
-      setLearning(c,true);
-      x.play();
+      const a=getAudio();
+      if(currentAudio && currentAudio!==a){
+        currentAudio.pause();
+        currentAudio.currentTime=0;
+      }
+      clearHighlight();
+      repeatLeft=0;
+      slowMode=!slowMode;
+      a.playbackRate=slowMode ? 0.65 : 0.85;
+      slower.textContent=slowMode ? "🐢 Normal Slow" : "🐢 Slower";
+      currentAudio=a;
+      currentCard=card;
+      a.play();
     };
 
     repeat.onclick=()=>{
-      const x=make();
-      stopOther(x,c);
+      const a=getAudio();
+      if(currentAudio && currentAudio!==a){
+        currentAudio.pause();
+        currentAudio.currentTime=0;
+      }
+      clearHighlight();
       repeatLeft=2;
-      x.playbackRate=0.75;
-      x.currentTime=0;
-      setLearning(c,true);
-      x.play();
+      a.playbackRate=0.85;
+      a.currentTime=0;
+      currentAudio=a;
+      currentCard=card;
+      a.play();
     };
   });
 }
 
-function stopOther(x,c){
-  if(audio && audio!==x){
-    audio.pause();
-    audio.currentTime=0;
-  }
-  clearLearning();
-  audio=x;
-  card=c;
-}
-
-function btn(t){
+function btn(text){
   const b=document.createElement("button");
-  b.textContent=t;
+  b.type="button";
+  b.textContent=text;
   return b;
 }
 
 $("j1").onclick=()=>{
-  juz=1; page=1;
+  juz=1;
+  page=1;
   $("j1").classList.add("active");
   $("j2").classList.remove("active");
   buildPages();
@@ -183,7 +254,8 @@ $("j1").onclick=()=>{
 };
 
 $("j2").onclick=()=>{
-  juz=2; page=22;
+  juz=2;
+  page=22;
   $("j2").classList.add("active");
   $("j1").classList.remove("active");
   buildPages();
@@ -191,7 +263,7 @@ $("j2").onclick=()=>{
 };
 
 $("page").onchange=e=>{
-  page=+e.target.value;
+  page=Number(e.target.value);
   render();
 };
 
